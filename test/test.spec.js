@@ -17,15 +17,17 @@ mockery.registerMock('node-hid', {
 			productId: 0x0060,
 			path: 'foo'
 		}];
-	},
-	HID: class extends EventEmitter {
-		constructor() {
-			super();
-			this.write = sinon.spy();
-			this.sendFeatureReport = sinon.spy();
-		}
 	}
 });
+
+class DummyHID extends EventEmitter {
+	constructor() {
+		super();
+		this.write = sinon.spy();
+		this.sendFeatureReport = sinon.spy();
+	}
+}
+
 mockery.enable({
 	warnOnUnregistered: false
 });
@@ -33,10 +35,11 @@ mockery.enable({
 // Must be required after we register a mock for `node-hid`.
 const StreamDeck = require('../');
 
-const streamDeck = new StreamDeck();
+const streamDeck = new StreamDeck(new DummyHID());
 
 test.afterEach(() => {
 	streamDeck.device.write.reset();
+	streamDeck.device.sendFeatureReport.reset();
 });
 
 test('fillColor', t => {
@@ -73,9 +76,7 @@ test('checkValidKeyIndex', t => {
 
 test('clearKey', t => {
 	t.plan(2);
-
 	streamDeck.clearKey(0);
-
 	validateWriteCall(
 		t,
 		streamDeck.device.write,
@@ -89,10 +90,10 @@ test('clearKey', t => {
 	);
 });
 
-test.cb('fillImageFromFile', t => {
-	t.plan(2);
-	streamDeck.fillImageFromFile(0, path.resolve(__dirname, 'fixtures', 'nodecg_logo.png'))
+test.only('fillImageFromFile', t => {
+	return streamDeck.fillImageFromFile(0, path.resolve(__dirname, 'fixtures', 'nodecg_logo.png'))
 	.then(() => {
+		console.log('back from func');
 		validateWriteCall(
 			t,
 			streamDeck.device.write,
@@ -101,12 +102,12 @@ test.cb('fillImageFromFile', t => {
 				'fillImageFromFile-nodecg_logo-page2.json'
 			]
 		);
-		t.end();
+		console.log('after validate');
 	});
 });
 
-test.cb('fillImageOnAll', t => {
-	streamDeck.fillImageOnAll(path.resolve(__dirname, 'fixtures', 'red_square.png'))
+test('fillImageOnAll', t => {
+	return streamDeck.fillImageOnAll(path.resolve(__dirname, 'fixtures', 'red_square.png'))
 	.then(() => {
 		validateWriteCall(
 			t,
@@ -116,7 +117,6 @@ test.cb('fillImageOnAll', t => {
 				'fillImageOnAll-red_square-page2.json'
 			]
 		);
-		t.end();
 	})
 	.catch(error => {
 		throw error;
@@ -125,12 +125,20 @@ test.cb('fillImageOnAll', t => {
 
 function validateWriteCall(t, spy, files, filter) {
 	const callCount = spy.callCount;
+	if (callCount !== files.length) {
+		t.fail('Spy was not called correct number of times');
+		return;
+	}
+	console.log(callCount);
+	console.log(files);
 	for (let i = 0; i < callCount; i++) {
+
 		let data = readFixtureJSON(files[i]);
 		if (filter) {
 			data = filter(data);
 		}
 		t.deepEqual(spy.getCall(i).args[0], data);
+		console.log('im here');
 	}
 }
 
@@ -161,6 +169,7 @@ test('fillImage undersized buffer', t => {
 });
 
 test('setBrightness', t => {
+	t.plan(4);
 	streamDeck.setBrightness(100);
 	streamDeck.setBrightness(0);
 
@@ -173,6 +182,8 @@ test('setBrightness', t => {
 
 function readFixtureJSON(fileName) {
 	const filePath = path.resolve(__dirname, 'fixtures', fileName);
+	console.log('reading', filePath);
 	const fileData = fs.readFileSync(filePath);
+	console.log(fileData);
 	return JSON.parse(fileData);
 }

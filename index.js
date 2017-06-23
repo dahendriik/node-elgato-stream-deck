@@ -166,18 +166,23 @@ class StreamDeck extends EventEmitter {
 	 */
 	fillImageFromFile(keyIndex, filePath) {
 		StreamDeck.checkValidKeyIndex(keyIndex);
-		return jimp.read(filePath).then(image => {
-			image
-				.cover(ICON_SIZE, ICON_SIZE)
-				.getBuffer(jimp.MIME_BMP, (err, imageBuffer) => {
-					if (err) {
-						throw err;
-					}
-
-					const shouldBeSize = ICON_SIZE * ICON_SIZE * 3;
-					this.fillImage(keyIndex, imageBuffer.slice(imageBuffer.length - shouldBeSize));
+		return jimp.read(filePath)
+			.then(image => {
+				return new Promise((resolve, reject) => {
+					image
+					.cover(ICON_SIZE, ICON_SIZE)
+					.getBuffer(jimp.MIME_BMP, (err, imageBuffer) => {
+						if (err) {
+							reject(err);
+						}
+						resolve(imageBuffer);
+					});
 				});
-		});
+			})
+			.then(imageBuffer => {
+				const shouldBeSize = ICON_SIZE * ICON_SIZE * 3;
+				return this.fillImage(keyIndex, imageBuffer.slice(imageBuffer.length - shouldBeSize));
+			});
 	}
 	/**
 	 * Fill's the whole panel with an image from a file. The file is scaled to fit (no stretching)
@@ -185,47 +190,38 @@ class StreamDeck extends EventEmitter {
 	 * @returns {Promise<void>} Resolves when the file has been written
 	 */
 	fillImageOnAll(filePath) {
-		return new Promise((resolve, reject) => {
-			jimp.read(filePath)
-				.then(image => {
-					image
-						.contain(PANEL_BUTTONS_X * ICON_SIZE, PANEL_BUTTONS_Y * ICON_SIZE);
+		return jimp.read(filePath)
+			.then(image => {
+				image.contain(PANEL_BUTTONS_X * ICON_SIZE, PANEL_BUTTONS_Y * ICON_SIZE);
 
-					const buttons = [];
-					for (let y = 0; y < PANEL_BUTTONS_Y; y++) {
-						for (let x = 0; x < PANEL_BUTTONS_X; x++) {
-							buttons.push({
-								i: (y * PANEL_BUTTONS_X) + PANEL_BUTTONS_X - x - 1,
-								x,
-								y
-							});
-						}
-					}
-					Promise.map(
-						buttons,
-						button => {
-							return new Promise((resolve, reject) => {
-								image
-									.clone()
-									.crop(button.x * ICON_SIZE, button.y * ICON_SIZE, ICON_SIZE, ICON_SIZE)
-									.getBuffer(jimp.MIME_BMP, (err, imageBuffer) => {
-										if (err) {
-											reject(err);
-										}
-										const shouldBeSize = ICON_SIZE * ICON_SIZE * 3;
-										this.fillImage(button.i, imageBuffer.slice(imageBuffer.length - shouldBeSize));
-										resolve();
-									});
-							});
-						})
-						.then(() => {
-							resolve();
+				const buttons = [];
+				for (let y = 0; y < PANEL_BUTTONS_Y; y++) {
+					for (let x = 0; x < PANEL_BUTTONS_X; x++) {
+						buttons.push({
+							i: (y * PANEL_BUTTONS_X) + PANEL_BUTTONS_X - x - 1,
+							x,
+							y
 						});
-				})
-				.catch(error => {
-					reject(error);
-				});
-		});
+					}
+				}
+				return Promise.map(
+					buttons,
+					button => {
+						return new Promise((resolve, reject) => {
+							image
+								.clone()
+								.crop(button.x * ICON_SIZE, button.y * ICON_SIZE, ICON_SIZE, ICON_SIZE)
+								.getBuffer(jimp.MIME_BMP, (err, imageBuffer) => {
+									if (err) {
+										reject(err);
+									}
+									const shouldBeSize = ICON_SIZE * ICON_SIZE * 3;
+									this.fillImage(button.i, imageBuffer.slice(imageBuffer.length - shouldBeSize));
+									resolve();
+								});
+						});
+					});
+			});
 	}
 
 	/**
