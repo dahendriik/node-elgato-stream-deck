@@ -5,7 +5,8 @@ const EventEmitter = require('events');
 
 // Packages
 const HID = require('node-hid');
-const sharp = require('sharp');
+const jimp = require('jimp');
+require('bluefill');
 
 const NUM_KEYS = 15;
 const PAGE_PACKET_SIZE = 8191;
@@ -13,26 +14,27 @@ const NUM_FIRST_PAGE_PIXELS = 2583;
 const NUM_SECOND_PAGE_PIXELS = 2601;
 const ICON_SIZE = 72;
 const NUM_TOTAL_PIXELS = NUM_FIRST_PAGE_PIXELS + NUM_SECOND_PAGE_PIXELS;
-
-const devices = HID.devices();
-const connectedStreamDecks = devices.filter(device => {
-	return device.vendorId === 0x0fd9 && device.productId === 0x0060;
-});
-
-/* istanbul ignore if  */
-if (connectedStreamDecks.length > 1) {
-	throw new Error('More than one Stream Deck is connected. This is unsupported at this time.');
-}
-
-/* istanbul ignore if  */
-if (connectedStreamDecks.length < 1) {
-	throw new Error('No Stream Decks are connected.');
-}
+const PANEL_BUTTONS_X = 5;
+const PANEL_BUTTONS_Y = 3;
 
 class StreamDeck extends EventEmitter {
 	constructor(device) {
 		super();
-		this.device = device;
+
+		if (device) {
+			this.device = device;
+		} else {
+			// Device not provided, will then select any connected device:
+			const devices = HID.devices();
+			const connectedStreamDecks = devices.filter(device => {
+				return device.vendorId === 0x0fd9 && device.productId === 0x0060;
+			});
+			if (!connectedStreamDecks.length) {
+				throw new Error('No Stream Decks are connected.');
+			}
+			this.device = new HID.HID(connectedStreamDecks[0].path);
+		}
+
 		this.keyState = new Array(NUM_KEYS).fill(false);
 
 		this.device.on('data', data => {
@@ -49,7 +51,6 @@ class StreamDeck extends EventEmitter {
 						this.emit('up', i);
 					}
 				}
-
 				this.keyState[i] = keyPressed;
 			}
 		});
@@ -146,8 +147,9 @@ class StreamDeck extends EventEmitter {
 				const b = imageBuffer.readUInt8(i + 2);
 				row.push(r, g, b);
 			}
-			pixels = pixels.concat(row.reverse());
+			pixels = pixels.concat(row);
 		}
+		pixels.reverse();
 
 		const firstPagePixels = pixels.slice(0, NUM_FIRST_PAGE_PIXELS * 3);
 		const secondPagePixels = pixels.slice(NUM_FIRST_PAGE_PIXELS * 3, NUM_TOTAL_PIXELS * 3);
@@ -164,15 +166,66 @@ class StreamDeck extends EventEmitter {
 	 */
 	fillImageFromFile(keyIndex, filePath) {
 		StreamDeck.checkValidKeyIndex(keyIndex);
+		return jimp.read(filePath).then(image => {
+			image
+				.cover(ICON_SIZE, ICON_SIZE)
+				.getBuffer(jimp.MIME_BMP, (err, imageBuffer) => {
+					if (err) {
+						throw err;
+					}
 
-		return sharp(filePath)
-			.flatten() // Eliminate alpha channel, if any.
-			.resize(this.ICON_SIZE)
-			.raw()
-			.toBuffer()
-			.then(buffer => {
-				return this.fillImage(keyIndex, buffer);
-			});
+					const shouldBeSize = ICON_SIZE * ICON_SIZE * 3;
+					this.fillImage(keyIndex, imageBuffer.slice(imageBuffer.length - shouldBeSize));
+				});
+		});
+	}
+	/**
+	 * Fill's the whole panel with an image from a file. The file is scaled to fit (no stretching)
+	 * @param {String} filePath A file path to an image file
+	 * @returns {Promise<void>} Resolves when the file has been written
+	 */
+	fillImageOnAll(filePath) {
+		return new Promise((resolve, reject) => {
+			jimp.read(filePath)
+				.then(image => {
+					image
+						.contain(PANEL_BUTTONS_X * ICON_SIZE, PANEL_BUTTONS_Y * ICON_SIZE);
+
+					const buttons = [];
+					for (let y = 0; y < PANEL_BUTTONS_Y; y++) {
+						for (let x = 0; x < PANEL_BUTTONS_X; x++) {
+							buttons.push({
+								i: (y * PANEL_BUTTONS_X) + PANEL_BUTTONS_X - x - 1,
+								x,
+								y
+							});
+						}
+					}
+					Promise.map(
+						buttons,
+						button => {
+							return new Promise((resolve, reject) => {
+								image
+									.clone()
+									.crop(button.x * ICON_SIZE, button.y * ICON_SIZE, ICON_SIZE, ICON_SIZE)
+									.getBuffer(jimp.MIME_BMP, (err, imageBuffer) => {
+										if (err) {
+											reject(err);
+										}
+										const shouldBeSize = ICON_SIZE * ICON_SIZE * 3;
+										this.fillImage(button.i, imageBuffer.slice(imageBuffer.length - shouldBeSize));
+										resolve();
+									});
+							});
+						})
+						.then(() => {
+							resolve();
+						});
+				})
+				.catch(error => {
+					reject(error);
+				});
+		});
 	}
 
 	/**
@@ -287,4 +340,4 @@ class StreamDeck extends EventEmitter {
 	}
 }
 
-module.exports = new StreamDeck(new HID.HID(connectedStreamDecks[0].path));
+module.exports = StreamDeck;
